@@ -54,6 +54,7 @@ Built so a human can audit the system in one glance instead of trusting it blind
 - [Decision states](#decision-states)
 - [Results](#results)
 - [Quick start](#quick-start)
+- [Repository layout](#repository-layout)
 - [Configuration](#configuration)
 - [Engineering log](#engineering-log)
 - [Test suite](#test-suite)
@@ -428,6 +429,25 @@ python -c "from face_demo import Cfg, run; run(Cfg(video='input.mp4'))"
 python test_face_demo.py          # 8/8 should pass
 python make_figures.py            # regenerate every figure in this README
 ```
+
+---
+
+## Repository layout
+
+```
+face_demo.py            the entire system — one file, linear, ~1,300 lines
+Face_Mask_Demo.ipynb    Colab notebook, generated from face_demo.py
+test_face_demo.py       8 logic tests against mock models (no GPU needed)
+make_figures.py         regenerates every figure in this README from live code
+assets/                 those figures
+legacy/                 earlier versions, kept for provenance
+STATUS.md               working notes (Persian)
+```
+
+> The notebook is **generated** from `face_demo.py`. Always edit the source
+> and rebuild — editing the notebook by hand once left a stale factory
+> function in it, and the strongest model in the system silently stopped
+> loading. That bug is entry 10 in the engineering log.
 
 ---
 
