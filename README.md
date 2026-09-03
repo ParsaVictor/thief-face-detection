@@ -583,11 +583,19 @@ talk properly about the details.
 <div align="center">
 <sub>
 
-**Keywords** — concealed face detection · balaclava detection · retail security AI · CCTV video
-analytics · loss prevention · YOLO26 pose estimation · ByteTrack identity switch · multi-object
-tracking · occlusion handling · mask vs balaclava classification · SigLIP · head orientation
-estimation · COCO keypoints chirality · real-time surveillance · shoplifting detection ·
-zero-shot computer vision · Python · PyTorch
+**Keywords** — concealed face detection · balaclava detection · thief face detection · retail
+security AI · CCTV video analytics · loss prevention · YOLO26 pose estimation · ByteTrack
+identity switch · multi-object tracking · occlusion handling · mask vs balaclava classification ·
+SigLIP · head orientation estimation · COCO keypoints chirality · real-time surveillance ·
+shoplifting detection · zero-shot computer vision · Python · PyTorch
+
+</sub>
+
+<sub>
+
+**کلیدواژه‌ها** — تشخیص چهرهٔ دزد · تشخیص چهره · تشخیص دزد · دوربین مدار بسته · امنیت فروشگاه ·
+ماسک · ماسک پزشکی · نقاب · ماسکِ دزدی · تشخیص سرقت · تحلیل ویدیو · هوش مصنوعی امنیتی ·
+ردیابی افراد · تشخیص پوشش صورت · بینایی ماشین · یادگیری عمیق · پایتون
 
 </sub>
 
