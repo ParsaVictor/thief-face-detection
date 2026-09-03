@@ -94,7 +94,7 @@ flowchart TB
 
     MEM --> ORI{Phase E<br/>chirality orientation}
     ORI -->|facing away| AWAY[No judgement<br/>previous verdict preserved]
-    AWAY -.->|safety valve<br/>every 45 frames| GATE
+    AWAY -.->|safety valve every 45 frames| GATE
     ORI -->|facing camera| GATE{Face gate<br/>keypoint conf · eye distance · sharpness}
 
     GATE -->|fails| HOLD[Analysing...<br/>no vote cast]
@@ -143,7 +143,7 @@ stateDiagram-v2
     Analysing --> Medical: 3 votes, covered + skin above mask
     Analysing --> Suspicious: 3 votes, covered + no skin
 
-    Clear --> Suspicious: re-check every 60 frames<br/>catches "masked up inside"
+    Clear --> Suspicious: re-check every 60 frames — catches masking up inside
     Clear --> Medical: re-check every 60 frames
 
     Medical --> Suspicious: majority in a 4-frame window
@@ -151,7 +151,7 @@ stateDiagram-v2
     Medical --> Clear: 3 green in a 4-frame window
     Suspicious --> Clear: 3 green in a 4-frame window
 
-    Analysing --> Analysing: too far, too blurred,<br/>too dark, or facing away
+    Analysing --> Analysing: too far, too blurred, too dark, or facing away
 ```
 
 | State | Overlay | Meaning | What triggers it |
