@@ -13,16 +13,26 @@ venv/
 .idea/
 *.swp
 
-# Models & Data
+# Models & data — downloaded on first run, never committed
 *.pt
 *.pth
 *.model
 *.zip
 
-# Videos & Large Files
+# Videos — the demo clips under assets/video/ are the exception,
+# everything else (raw input, full-length renders) stays out of git
 *.mp4
 *.avi
 *.mov
+!assets/video/*.mp4
+
+# Run outputs — crops and events are produced locally
+runs/
+*_events.json
+
+# Local scratch images
+photo_*.jpg
+_test_*.jpg
 
 # Jupyter
 .ipynb_checkpoints/

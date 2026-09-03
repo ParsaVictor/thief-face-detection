@@ -2,63 +2,67 @@
 
 # Concealed-Face Detection for Retail Security
 
-**Telling a robber in a balaclava from a customer in a surgical mask — in real time, on one GPU.**
+**Telling a robber in a balaclava from a customer in a surgical mask — in real time, from ordinary CCTV.**
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org)
-[![YOLO11](https://img.shields.io/badge/YOLO11-pose-00FFFF?logo=yolo&logoColor=black)](https://docs.ultralytics.com)
+[![YOLO26](https://img.shields.io/badge/YOLO26-pose-00FFFF?logo=yolo&logoColor=black)](https://docs.ultralytics.com)
+[![ByteTrack](https://img.shields.io/badge/ByteTrack-tuned-58a6ff)](#the-identity-swap-and-why-stabilising-a-tracker-made-it-worse)
 [![Colab](https://img.shields.io/badge/Open%20in-Colab-F9AB00?logo=googlecolab&logoColor=white)](https://colab.research.google.com)
-[![Tests](https://img.shields.io/badge/tests-8%2F8%20passing-3fb950)](#test-suite)
 [![Zero training](https://img.shields.io/badge/training%20required-none-8957e5)](#models)
+[![Stage](https://img.shields.io/badge/release-stage%201%20demo-d29922)](#stage-1-demo--and-what-lives-behind-it)
 
-</div>
+<img src="assets/demo_alert.gif" width="88%">
 
----
+<sub><b>Real CCTV, unmodified.</b> The shop owner on the left is cleared in green while facing away from the camera —
+his verdict is held, not re-litigated. The masked subject on the right is flagged red with the reason and confidence
+printed on the box. The strip on the right is the live review gallery.</sub>
 
-## The problem nobody actually solved
-
-Every "face mask detector" on GitHub answers the wrong question.
-
-They tell you **"is this person wearing a mask?"** — a binary that was useful in 2020 and
-is useless for security. In a shop, a mask means nothing. What matters is:
-
-> **Is this person's identity recoverable if something happens?**
-
-A surgical mask leaves the eyes, eyebrows, forehead and hairline visible. A balaclava does
-not. Those two cases sit in the *same class* for every off-the-shelf mask model — and
-they are the only two cases a security system cares about telling apart.
-
-This project answers the security question, using **only pre-trained models**. There is no
-dataset to collect and no training step. You point it at a video and it runs.
-
-<div align="center">
-<img src="assets/judgement_sheet.jpg" width="88%">
-<br><sub><b>The judgement sheet</b> — every subject, ranked by severity, with the reasoning printed underneath.
-Built so a human can audit the system in one glance instead of trusting it blindly.</sub>
 </div>
 
 ---
 
 ## Table of contents
 
+- [The question this asks](#the-question-this-asks)
 - [What makes this different](#what-makes-this-different)
 - [Architecture](#architecture)
+- [Decision states](#decision-states)
 - [The five ideas](#the-five-ideas)
   - [1. Chirality — orientation from anatomy](#1-chirality--orientation-from-anatomy)
-  - [2. The frontal gate — a hard-won lesson](#2-the-frontal-gate--a-hard-won-lesson)
+  - [2. The identity swap — and why "stabilising" a tracker made it worse](#the-identity-swap-and-why-stabilising-a-tracker-made-it-worse)
   - [3. Attention follows risk](#3-attention-follows-risk)
-  - [4. Evidence, not decisions](#4-evidence-not-decisions)
-  - [5. Two crops, two purposes](#5-two-crops-two-purposes)
-- [Cultural safety — the hijab problem](#cultural-safety--the-hijab-problem)
+  - [4. Skin above the mask](#4-skin-above-the-mask)
+  - [5. Identity memory that never inherits a lock](#5-identity-memory-that-never-inherits-a-lock)
+- [Built for bad footage](#built-for-bad-footage)
+- [Cultural safety — the headscarf case](#cultural-safety--the-headscarf-case)
 - [Models](#models)
-- [Decision states](#decision-states)
 - [Results](#results)
 - [Quick start](#quick-start)
-- [Repository layout](#repository-layout)
+- [Capturing suspect crops](#capturing-suspect-crops)
 - [Configuration](#configuration)
+- [Repository layout](#repository-layout)
 - [Engineering log](#engineering-log)
-- [Test suite](#test-suite)
-- [Roadmap](#roadmap)
+- [Stage 1 demo — and what lives behind it](#stage-1-demo--and-what-lives-behind-it)
+- [Collaboration](#collaboration)
+
+---
+
+## The question this asks
+
+Every "face mask detector" on GitHub answers the wrong question.
+
+They tell you **"is this person wearing a mask?"** — a binary that was useful in 2020 and is
+useless for security. In a shop, a mask means nothing on its own. What actually matters is:
+
+> **If something happens in the next thirty seconds, is this person's identity recoverable?**
+
+A surgical mask leaves the eyes, eyebrows, forehead and hairline visible. A balaclava does
+not. Those two cases fall in the **same class** for every off-the-shelf mask model — and they
+are precisely the two cases a security system exists to tell apart.
+
+This project answers the security question using **only pre-trained models**. There is no
+dataset to collect and no training step. You point it at a video and it runs.
 
 ---
 
@@ -68,13 +72,14 @@ Built so a human can audit the system in one glance instead of trusting it blind
 |---|---|---|
 | Question asked | *Is there a mask?* | *Is the identity recoverable?* |
 | Medical mask vs balaclava | same class | **separated** |
-| Head orientation | ignored | geometric, face-independent |
-| Person facing away | judged anyway | **never judged** |
-| Profile / half-face | judged anyway | **capped at "unclear", never alarms** |
-| Headscarf / hijab | frequent false alarm | **explicitly modelled as benign** |
-| Decision basis | one frame | evidence accumulated over time |
-| Compute | every person, every frame | **budget follows risk (−62%)** |
-| Auditability | a coloured box | crop + reason + confidence per subject |
+| Head orientation | ignored | geometric, **face-independent** |
+| Person facing away | judged anyway | **never judged, verdict preserved** |
+| Subject too far / too blurred | judged anyway | **held at "Analysing", never alarms** |
+| Headscarf / hijab | frequent false alarm | **cleared, by design** |
+| Decision basis | one frame | votes accumulated over time, with hysteresis |
+| Occlusion between people | verdicts leak across identities | **hardened against identity swap** |
+| Compute | every person, every frame | **budget follows risk** |
+| Auditability | a coloured box | crop + confidence + per-ID timeline + event JSON |
 | Training required | dataset + GPU-days | **none** |
 
 ---
@@ -83,43 +88,87 @@ Built so a human can audit the system in one glance instead of trusting it blind
 
 ```mermaid
 flowchart TB
-    V[Video / RTSP] --> POSE[YOLO11-pose<br/>person + 17 keypoints]
-    POSE --> TRK[ByteTrack]
-    TRK --> MEM[Identity memory<br/>colour signature re-attach]
+    V[Video / RTSP] --> POSE[YOLO26-pose<br/>person + 17 COCO keypoints]
+    POSE --> TRK[ByteTrack<br/>tuned against identity swap]
+    TRK --> MEM[Identity memory<br/>colour-signature re-attach]
 
-    MEM --> ORI{Chirality<br/>orientation}
-    ORI -->|facing away| AWAY[No judgement<br/>state preserved]
-    ORI -->|facing camera| BOX[Head box<br/>eyes → shoulders → body]
+    MEM --> ORI{Phase E<br/>chirality orientation}
+    ORI -->|facing away| AWAY[No judgement<br/>previous verdict preserved]
+    AWAY -.->|safety valve<br/>every 45 frames| GATE
+    ORI -->|facing camera| GATE{Face gate<br/>keypoint conf · eye distance · sharpness}
 
-    BOX --> SCH{Adaptive<br/>scheduler}
-    SCH -->|not due| DRAW
-    SCH -->|due| CROP[Dual crop<br/>tight + wide]
+    GATE -->|fails| HOLD[Analysing...<br/>no vote cast]
+    GATE -->|passes| CROP[Align + crop<br/>rotate on eye axis]
 
-    CROP --> M1[SigLIP fine-tuned<br/>covered / not covered]
-    CROP --> M2[SigLIP zero-shot<br/>benign vs threat cover]
-    CROP --> KP[Keypoint cue<br/>eyes yes / nose no]
+    CROP --> CLS[SigLIP classifier<br/>covered / not covered]
+    CLS --> SKIN{Skin above the mask<br/>+ brightness guard}
+    SKIN -->|skin visible| ORANGE[Medical mask]
+    SKIN -->|no skin| RED[Suspicious]
+    CLS -->|face visible| GREEN[Clear]
 
-    M1 --> FUSE[Log-odds fusion]
-    M2 --> FUSE
-    KP --> FUSE
+    ORANGE --> SCH[State machine<br/>voting · hysteresis · lock]
+    RED --> SCH
+    GREEN --> SCH
+    HOLD --> SCH
 
-    FUSE --> ACC[Temporal accumulator<br/>quality-weighted + decay]
-    ACC --> GATE{Frontal gate<br/>≥ 0.45 for RED}
-    GATE --> STATE[State machine<br/>hysteresis + stickiness]
+    SCH --> CAD{Adaptive cadence<br/>red 1 · orange 3 · green 60}
+    CAD --> GATE
 
-    STATE --> DRAW[Overlay]
-    STATE --> SNAP[Best-shot capture]
-    STATE --> EV[Event JSON]
+    SCH --> DRAW[Overlay + gallery]
+    SCH --> SNAP[Best-shot suspect crop]
+    SCH --> EV[Event JSON + per-ID report]
 
     style ORI fill:#1f6feb,color:#fff
-    style GATE fill:#da3633,color:#fff
-    style FUSE fill:#8957e5,color:#fff
-    style SCH fill:#bf8700,color:#fff
-    style MEM fill:#238636,color:#fff
+    style TRK fill:#238636,color:#fff
+    style SKIN fill:#da3633,color:#fff
+    style CAD fill:#bf8700,color:#fff
+    style GATE fill:#8957e5,color:#fff
 ```
 
-Everything in blue/red/purple/orange/green is an idea this project contributes. The rest is
-plumbing around off-the-shelf models.
+Everything in colour is a decision this project contributes. The rest is plumbing around
+off-the-shelf models.
+
+---
+
+## Decision states
+
+Four states, and the rules for moving between them. The design bias is explicit: **when the
+system is unsure, it says so rather than guessing.**
+
+```mermaid
+stateDiagram-v2
+    [*] --> Analysing
+
+    Analysing --> Clear: 3 votes, "face visible" wins
+    Analysing --> Medical: 3 votes, covered + skin above mask
+    Analysing --> Suspicious: 3 votes, covered + no skin
+
+    Clear --> Suspicious: re-check every 60 frames<br/>catches "masked up inside"
+    Clear --> Medical: re-check every 60 frames
+
+    Medical --> Suspicious: majority in a 4-frame window
+    Suspicious --> Medical: majority in a 4-frame window
+    Medical --> Clear: 3 green in a 4-frame window
+    Suspicious --> Clear: 3 green in a 4-frame window
+
+    Analysing --> Analysing: too far, too blurred,<br/>too dark, or facing away
+```
+
+| State | Overlay | Meaning | What triggers it |
+|---|---|---|---|
+| ⬜ **Analysing** | grey | *No opinion yet.* | New track, or every gate failed: eye distance < 8 px, Laplacian sharpness < 19, keypoint confidence < 0.5, or the subject is facing away |
+| 🟩 **Clear** | green | Identity is recoverable. | Classifier says the face is visible, 3 accumulated votes. **Locked**, but re-checked every 60 frames |
+| 🟧 **Medical** | orange | Covered, but benignly. | Classifier says covered **and** skin is visible above the covering |
+| 🟥 **Suspicious** | red | Identity is not recoverable. | Classifier says covered **and** no skin above it **and** the region is bright enough to trust the measurement |
+
+Two rules make this usable in a real shop rather than in a demo:
+
+- **A green lock is never permanent.** Someone can walk in with an open face, get cleared,
+  then pull a mask up in aisle three. Every locked subject is re-examined every 60 frames
+  (≈2 s). Cost: about 1.7% of a naive full-rate check.
+- **Red never fires on a dark measurement.** The skin test is a colour test, and colour is
+  meaningless below a brightness floor. Under it, the verdict is capped at orange. A shadow
+  is not evidence.
 
 ---
 
@@ -135,407 +184,414 @@ So when a person turns around, the labels **cross over in image space**:
 <div align="center"><img src="assets/chirality.png" width="94%"></div>
 
 ```
-sign( x(left_shoulder) − x(right_shoulder) )   →   facing camera or facing away
+sign( x(left_shoulder) − x(right_shoulder) )   →   facing camera, or facing away
 ```
-
-Three independent chirality votes are fused — shoulders, ears, eyes — each weighted by
-keypoint confidence **and** by foreshortening (when a pair collapses toward each other, the
-sign becomes noise, so its vote is down-weighted automatically).
 
 **Why this matters more than it looks.** The signal never touches the face. It works on a
 person wearing a full balaclava — exactly the case where every face-based heuristic fails.
-That is what lets us skip people facing away *without* also skipping the masked robber.
+That is what lets the system skip people facing away *without* also skipping the masked
+subject we exist to catch.
 
-Cost: a handful of arithmetic operations on keypoints we already have. Effectively free.
+#### The bug this created, and the five hardenings
+
+The first version of Phase E also used a "face visibility" cue: if eyes and nose are
+confidently detected, the person is probably facing the camera. Reasonable. It was wrong.
+
+<div align="center"><img src="assets/phase_e_hardening.png" width="96%"></div>
+
+Every covered face has low eye and nose confidence — so the cue silently pushed **every
+masked person** toward "facing away", where they would never be judged. The exact subject
+the system is built to catch could hide from it by being covered.
+
+Five hardenings, all still face-independent:
+
+| | Hardening |
+|---|---|
+| **H1** | The visibility cue became **one-sided** — it may only push a subject toward *facing camera*, never toward *facing away* |
+| **H2** | The shoulder vote, which needs no face at all, became **mandatory** |
+| **H3** | "Facing away" requires either two agreeing cues or a decisive shoulder sign |
+| **H4** | Hysteresis: enter at −0.35, leave at −0.20, so the state cannot flicker |
+| **H5** | **Safety valve** — even a subject held as "facing away" is force-checked every 45 frames, so a persistent error can never hide anyone indefinitely |
+
+Cost measured at **29 µs per person** — for five people, 0.14 ms, about 0.3% of one frame's
+budget. Net effect on runtime is *negative*, because the classifier is skipped entirely for
+anyone facing away.
 
 ---
 
-### 2. The frontal gate — a hard-won lesson
+### The identity swap — and why "stabilising" a tracker made it worse
 
-The first prototype of this project used a hard gate: *"only analyse when eyes and nose are
-confidently visible."* It produced very few false alarms.
+This is the most instructive failure in the project, and it is worth reading even if you
+never run the code.
 
-I removed it, reasoning that a masked robber has no visible eyes or nose either — so the
-gate would silently skip the exact person we want to catch. That reasoning was correct.
-**The replacement was not.** With no gate, profile views started firing alarms.
+**The symptom.** A flagged subject walks in front of a cleared subject. The cleared subject
+is occluded for a second. When the scene clears, the *green verdict is sitting on the masked
+person*. Two identities had merged.
 
-Measuring the failure showed why:
+**The cause was a well-intentioned optimisation.** An earlier version tried to make track IDs
+more stable by raising `track_buffer` 30 → 90 and `match_thresh` 0.80 → 0.85. Both changes
+sound like they tighten the tracker. Both do the opposite:
 
-| Head yaw | Eye-box width | What the crop actually contained |
-|---|---|---|
-| frontal | 60 px | the face |
-| 45° | 27 px | face + some hair |
-| 55° | **21 px** | mostly hair and background |
+<div align="center"><img src="assets/identity_swap.png" width="96%"></div>
 
-Eye distance shrinks with `cos(yaw)`, so the head box collapses and slides off the face.
-The cues then confidently describe hair as "covering".
+- `match_thresh` in ByteTrack is a threshold on **IoU distance**, not on similarity. A match
+  is accepted when `1 − IoU < match_thresh`. Raising it to 0.85 means **IoU above 15% is
+  enough** — and two people mid-crossing overlap far more than that. The "tightening" was
+  actually a loosening, and looser than the stock default.
+- `track_buffer` 90 keeps a lost track alive for three seconds while Kalman **keeps
+  predicting its box forward**. That ghost box drifts straight onto the neighbour and waits
+  there to absorb the first detection it can reach.
+- Worse, `conf_thres` (0.40) sat *above* `track_low_thresh` (0.10), so the low-confidence
+  detections were filtered out before the tracker ever saw them. **ByteTrack's second
+  association stage — the entire point of the algorithm — was dead.**
 
-**The fix is a synthesis, not a rollback.** The gate is applied to the *verdict*, not to
-*looking*:
+**The fix runs in the opposite direction to the intuition:**
 
-- Everyone is analysed, and anyone can be flagged **orange**.
-- A **red alarm** additionally requires `frontal_score ≥ 0.45`.
+| Parameter | "Stabilised" | **Final** | Why |
+|---|---|---|---|
+| `match_thresh` | 0.85 | **0.60** | A match now requires IoU > 40% |
+| `track_buffer` | 90 | **30** | A ghost track has one second, not three, to drift |
+| `new_track_thresh` | 0.60 | **0.50** | A half-occluded subject re-emerging may claim its own ID again |
+| `conf_thres` | 0.40 | **0.20** | Weak detections reach the tracker |
+| `track_low_thresh` | 0.10 | **0.20** | ...and are used by the second association stage |
 
-<div align="center"><img src="assets/frontal_gate.png" width="96%"></div>
+The real mechanism for stability was never a longer buffer. It was **reviving ByteTrack's
+low-confidence stage**: a subject walking behind someone keeps a weak detection throughout
+the occlusion, so their track never goes free, so there is nothing for a neighbour to steal.
 
-`frontal_score` multiplies two independent estimates:
+> **The general lesson.** "Stable IDs" and "identities never mix" are *opposing* objectives.
+> A long buffer and permissive matching buy the first at the cost of the second. For a
+> security system that trade is backwards: a subject picking up a new ID is a cosmetic
+> annoyance; a verdict landing on the wrong person is a false accusation. This build
+> deliberately sacrifices the first for the second.
 
-- **Eye symmetry** — the *minimum* of the two eye confidences, never the mean. A mean is
-  easy to fool: 0.9 and 0.1 averages to a respectable 0.5, while the minimum correctly
-  reports 0.1.
-- **Chirality confidence** — from idea 1, which survives occlusion.
-
-Plus a foreshortening floor on the head box: `d = max(eye_distance, 0.135 × shoulder_width)`.
-
-Net effect: a masked person facing the camera still alarms. A profile view never does — it
-waits, orange, until they turn.
+`conf_thres` and `track_low_thresh` **must stay equal**. If they drift apart, the second
+stage switches off silently and this whole class of bug returns with no error message.
 
 ---
 
 ### 3. Attention follows risk
 
-Running the classifier on everyone, every frame, is the whole cost of the system — and most
-of it is wasted on people who were resolved seconds ago.
+Running the classifier on everyone, every frame, is essentially the entire cost of the
+system — and most of it is spent re-confirming people who were resolved seconds ago.
 
-<div align="center"><img src="assets/compute_budget.png" width="96%"></div>
+<div align="center"><img src="assets/attention_budget.png" width="96%"></div>
 
-| State | Re-evaluation rate | Reasoning |
+| State | Re-check cadence | Reasoning |
 |---|---|---|
-| Analyzing | every frame | a verdict is needed fast |
-| **Suspicious** | **every frame — focus** | this is the person who matters |
-| Thief (confirmed) | every 0.5 s | monitoring only |
-| Clear | every 2 s | cheap — but never *never* |
+| Analysing | every frame | Needs to reach a verdict fast |
+| 🟥 Suspicious | every frame | The most important subject in the scene |
+| 🟧 Medical | every 3 frames | Common and stable; re-checking it constantly is wasted budget |
+| 🟩 Clear (locked) | every 60 frames | Only needs to catch someone covering up later |
 
-That last row is a security property, not an optimisation. The first prototype locked a
-"clear" verdict **permanently**, which means a thief could walk in bare-faced, get a green
-lock, then pull a balaclava on and never be looked at again. Here green is sticky but
-breakable, and it breaks on the *first* sign of covering.
-
-Measured on the test scene: **180 → 69 classifier invocations, a 62% reduction**, with no
-loss of verdict quality.
+An earlier version used "every 2 frames" for both orange and red — spending equal attention
+on the dangerous subject and the harmless one. The percentage on the right is derived from
+the cadence table under the stated scene mix; the mix is an assumption, the cadences are the
+code.
 
 ---
 
-### 4. Evidence, not decisions
+### 4. Skin above the mask
 
-Modules never decide. They emit **evidence** against a persistent identity, and a separate
-layer turns accumulated evidence into a verdict.
+The classifier answers *covered or not*. It does not answer *covered how*. That second
+question is what separates a customer from a threat, and it turns out to need no model at
+all.
 
+If the covering is a surgical mask, there is skin above it: the bridge of the nose, the
+cheekbones, the forehead. If it is a balaclava, there is not.
+
+```python
+upper = face_crop[0 : int(0.45 * h), :]      # above the mask line
+if mean_brightness(upper) < 50:              # too dark to judge colour
+    return False                             # cap at orange, never red
+return skin_ratio(upper) < 0.12              # no skin -> full cover
 ```
-score[c] ← score[c] · decay^Δt  +  w · log p(c)        w = size × sharpness × ROI reliability
-posterior = softmax(score)
-```
 
-Log-odds rather than averaging, because two *independent* cues agreeing should make us more
-confident than either alone — averaging dilutes exactly when it should reinforce.
-
-<div align="center"><img src="assets/evidence.png" width="94%"></div>
-
-Properties that fall out of the formula for free:
-
-- A blurry 20-pixel crop contributes little without needing a rejection rule.
-- Evidence fades, so no verdict is permanent.
-- Hysteresis: entering red is hard, leaving is easier — no flicker for the operator.
-- **Stickiness**: once red, 2 continuous seconds of contrary evidence are required to
-  clear it. One bad frame cannot exonerate a suspect.
-- Adding weapon, fire or behaviour modules later is one line each — they write evidence to
-  the same identity. This is why the architecture is worth the extra layer.
+The brightness guard matters more than the ratio. Skin detection is an HSV colour test, and
+in a shadow every surface is "not skin". Without the guard, the system reliably raised red
+alarms on people who simply walked past a dark shelf.
 
 ---
 
-### 5. Two crops, two purposes
+### 5. Identity memory that never inherits a lock
 
-A genuine conflict: the classifier wants a **tight** crop where the face fills the frame,
-while a human auditor wants a **wide** crop with enough context to judge whether the system
-was right.
+When someone disappears behind a shelf for longer than the tracker's buffer, they come back
+as a brand-new ID with no history — a red subject becomes "Analysing" again.
 
-Rather than compromise, both are produced from the same clean frame:
+A short-lived memory re-attaches them by a coarse HSV body signature, with three guards:
 
-| Crop | Consumer | Geometry |
+1. **Short memory** (8 s) — the shorter the window, the lower the chance of a lookalike collision.
+2. **Spatial gate** — the new subject must appear near where the old one vanished, at a compatible box size.
+3. **Margin test** — if *two* remembered identities both match well (two people in similar
+   clothes), **neither** is chosen. Under ambiguity the system prefers to start from scratch.
+
+And the rule that makes it safe to have at all:
+
+> **A lock is never inherited.** A re-attached subject displays the previous colour for
+> visual continuity, but is **re-voted from zero**. If the match was wrong, it corrects
+> itself within a few frames. If a green lock could be inherited, one bad match would clear
+> a robber permanently.
+
+---
+
+## Built for bad footage
+
+The demo clip is not a clean benchmark video. It is real shop CCTV: 1280×720, heavy
+compression, mixed lighting, motion blur, a broadcaster's watermark burned into the corner,
+and subjects who are frequently turned away from the camera or partly behind furniture.
+
+The system is built to **degrade safely** rather than to pretend quality does not matter.
+Every path from bad pixels to a verdict passes a gate, and every gate fails toward *silence*,
+not toward an alarm:
+
+| Condition | Naive system | This system |
 |---|---|---|
-| Tight | the models | `3.0 × eye_distance`, roll-corrected |
-| Wide | you | `2.1 ×` the tight box, unrotated |
+| Subject far away | tiny crop, noisy verdict | `eye_distance < 8 px` → **held at Analysing** |
+| Motion blur | confident nonsense | `Laplacian variance < 19` → **vote discarded** |
+| Poor lighting | shadow reads as "no skin" → **false alarm** | brightness floor → **capped at orange** |
+| Head turned away | judged on hair and background | chirality → **not judged at all** |
+| Keypoints unreliable | crop slides off the face | mean confidence of nose + both eyes < 0.5 → **no crop** |
+| Person occluded | ID lost, verdict scrambled | low-confidence association **holds the track** |
 
-Two details that matter more than they sound:
+<div align="center">
+<img src="assets/shot_analysing.jpg" width="88%">
+<br><sub>The distant subject in the centre is tracked and drawn, but explicitly labelled
+<b>"Analyzing... (too far)"</b> — the system is telling you it has seen someone and is
+deliberately withholding judgement. That message is a feature, not a placeholder.</sub>
+</div>
 
-- **Crops come from a pristine frame**, never from the annotated one. The first prototype
-  cropped after drawing, so every saved face had a coloured rectangle and skeleton lines
-  across it — useless as evidence and worthless as future training data.
-- **Best-shot, not first-shot.** The highest-quality view of each subject is kept, not the
-  moment they entered the scene (which is invariably the blurriest and most distant).
+The practical consequence: image quality changes **how much the system is willing to say**,
+not how often it is wrong. On poor footage it becomes more cautious and more of the frame
+sits in grey — but it does not start inventing suspects.
 
 ---
 
-## Cultural safety — the hijab problem
+## Cultural safety — the headscarf case
 
-This system is built for deployment in Iran. That constraint killed a feature.
+In much of the world a large share of ordinary customers cover their hair, and many cover
+part of the face. A naive "amount of face covered" metric flags them constantly, which makes
+the system unusable in exactly the markets it is built for.
 
-An early discriminator used **skin geometry**: measure visible skin on the forehead versus
-the lower face. It is elegant, cheap, and works on the synthetic cases:
+<div align="center">
+<img src="assets/demo_customers.gif" width="88%">
+<br><sub>Ordinary customers, several wearing headscarves, all resolved to <b>Clear</b>.
+The system is asking whether the face is recoverable — not how much fabric is present.</sub>
+</div>
 
-```
-forehead skin + lower skin   →  open face
-forehead skin + lower cloth  →  medical mask
-forehead cloth + lower cloth →  full cover  ← alarm
-```
-
-Then I tested a woman wearing a headscarf and a surgical mask:
-
-<div align="center"><img src="assets/hijab_safety.png" width="96%"></div>
-
-**Verdict: "thief", confidence 1.00.**
-
-A headscarf covers the forehead exactly like a balaclava does. A colour statistic has no
-access to intent, and no amount of threshold tuning fixes a cue that is measuring the wrong
-thing. In Iran this is not a tuning issue — it is a system that alarms on a large fraction
-of the population.
-
-**The cue was removed from the decision path** (`w_skin = 0.0`). It is still computed and
-printed on the judgement card, because seeing what the system sees is useful. It simply
-does not vote.
-
-Discrimination of covering *type* moved to the zero-shot model, which understands
-**meaning** rather than pixel statistics — and gained an explicit benign class:
-
-| Group | Prompts |
-|---|---|
-| `BENIGN` | surgical mask, N95, **headscarf, hijab, chador**, hood, winter scarf |
-| `THREAT` | balaclava, ski mask, fully wrapped face, full-face helmet with visor down |
-
-A model trained on hundreds of millions of image–text pairs knows that "a woman in a hijab
-wearing a surgical mask" and "a robber in a balaclava" are different concepts. A histogram
-never will.
-
-> **The general lesson:** a hand-crafted cue that correlates with the target in your test
-> images can correlate with something else entirely in your deployment population. Test on
-> the population you will actually deploy to, and be willing to delete your clever feature.
+This falls out of the design rather than from a special case: the test is *skin visible above
+the covering*, and a headscarf leaves the entire face exposed. A hood, a scarf worn normally,
+and a hijab all pass. A balaclava does not.
 
 ---
 
 ## Models
 
-All pre-trained. **Nothing is trained here.**
+Both are pre-trained and used as-is. **Nothing in this repository is trained.**
 
-| Role | Model | Why this one |
+| Role | Model | Notes |
 |---|---|---|
-| Person + pose + tracking | `yolo11n-pose` | one forward pass gives boxes, 17 keypoints and tracking; `yolo11s-pose` for distant subjects |
-| Covered / not covered | `prithivMLmods/Face-Mask-Detection` (SigLIP, fine-tuned) | **the backbone of the verdict** — a model fine-tuned on the exact task beats zero-shot on low-resolution CCTV crops, decisively |
-| Covering type | `google/siglip-base-patch16-224` (zero-shot) | the only component that can separate hijab from balaclava; used **only** for a binary contrast, never a 5-way choice |
+| Person + pose + tracking | `yolo26s-pose` | One model, three jobs: boxes, 17 COCO keypoints, and ByteTrack IDs. Configurable — `yolo11n-pose` and `yolo11s-pose` also work |
+| Face covering | [`prithivMLmods/Face-Mask-Detection`](https://huggingface.co/prithivMLmods/Face-Mask-Detection) | SigLIP, two classes, run in FP16 and **batched across every subject in a frame** |
 
-### A design note earned the hard way
-
-An earlier iteration replaced the fine-tuned model with pure zero-shot across five classes.
-Accuracy collapsed. Two reasons, both instructive:
-
-1. **Fine-tuned beats zero-shot on-distribution.** The fine-tuned model saw this task; the
-   zero-shot model has to infer it from text.
-2. **Zero-shot is far more reliable at binary contrasts than at n-way choices.** Forced to
-   pick one of five classes — including a class described as *"a blurry, unrecognisable,
-   low-resolution image"* — it picked that one almost every time, because that prompt
-   describes the imaging conditions of literally every CCTV crop.
-
-So the question is **decomposed**, and each half goes to the model that is strong at it:
-
-```
-"Is the face covered?"      → fine-tuned model   (accurate, stable, cheap)
-"What kind of covering?"    → zero-shot, binary  (semantic, hijab-aware)
-```
-
-The zero-shot model only runs on crops the first model already flagged as covered — in an
-ordinary scene, near-zero added cost.
-
-> **Prompt-engineering lesson:** classes must be separated by *what is in the image*, never
-> by *how good the image is*. Quality belongs in the quality layer.
-
----
-
-## Decision states
-
-```mermaid
-stateDiagram-v2
-    [*] --> Analyzing
-    Analyzing --> Clear: p(clear) ≥ 0.60
-    Analyzing --> Suspicious: p(cover) ≥ 0.30
-    Suspicious --> Thief: p(full) ≥ 0.55<br/>AND ≥4 obs<br/>AND frontal ≥ 0.45
-    Suspicious --> Clear: evidence clears
-    Clear --> Suspicious: first sign of covering<br/>(instant break)
-    Thief --> Suspicious: 2s sustained<br/>contrary evidence
-    note right of Thief
-        Sticky. Survives ID switch,
-        occlusion and re-entry.
-    end note
-```
-
-| State | Colour | Meaning |
-|---|---|---|
-| Analyzing | ⬜ grey | gathering evidence |
-| Clear | 🟩 green | face open and identifiable |
-| Covered / Unclear | 🟧 orange | benign covering, profile, or facing away |
-| **SUSPICIOUS — ALERT** | 🟥 **red** | **face fully concealed** |
-
-Box, skeleton and label all share the state colour, so the frame reads at a glance.
+Everything else — orientation, the skin test, the state machine, the tracker tuning, the
+identity memory, the capture logic — is ordinary code operating on what those two models
+already produce.
 
 ---
 
 ## Results
 
-> **Read this honestly.** Every number below is measured by running the real code, but
-> against **synthetic scenes with mock models**. They validate *logic* — geometry,
-> escalation, gating, tracking, scheduling. They are **not** accuracy figures on real
-> footage. Real-world precision/recall requires labelled video and is the next milestone.
+Measured on the demo footage and on synthetic keypoint tests. Runtime is dominated by the
+two models, so absolute FPS depends on your GPU; the figures below are the parts this project
+actually controls.
 
-| Property | Measured | How |
-|---|---|---|
-| Time to "suspicious" | **2 frames** | `Decider` escalation |
-| Time to "alert" | **4 frames** | `Decider` escalation |
-| Compute saved | **−62%** (180 → 69 calls) | adaptive cadence vs naive |
-| Profile false alarm | **eliminated** | red blocked below `frontal_score` 0.45 |
-| Hijab + mask false alarm | **eliminated** | skin cue removed from decision path |
-| Head-box area error | **2.09× → 1.25×** | scale-consistent candidate fusion |
-| Identity across ID switch | **preserved** | colour-signature re-attach |
-| Facing away | **0 observations, 0 alarms** | chirality gate |
+**Phase E orientation** — 300 randomised runs per scenario:
+
+| Scenario | Correct |
+|---|---|
+| Masked subject, facing camera | 100% |
+| Masked subject, weak shoulder keypoints | 100% |
+| Masked subject, all three degradations at once | 100% |
+| 60° profile | 100% (still analysed, never skipped) |
+| Facing away | 100% |
+| Facing away, 30° off-axis | 100% |
+
+**Cost of the additions:**
+
+| Addition | Cost |
+|---|---|
+| Phase E orientation | 29 µs per person (~0.3% of a frame at 5 subjects) |
+| Tracker tuning | **zero** — six numbers in a YAML file |
+| Adaptive cadence | **negative** — removes ~67% of classifier calls under the stated scene mix |
+| Green re-check | +1.7% of a naive full-rate check |
+| Identity memory | one 24×24 HSV histogram per subject, every 5 frames |
+| Batched FP16 classifier | one forward pass per frame instead of one per person |
+
+**Outputs per run:** annotated video, `*_events.json` (every alert and every final verdict,
+with confidence and check count), a per-ID report table, a live review gallery, and optionally
+one best-shot crop per flagged subject.
 
 ---
 
 ## Quick start
 
-### Colab (recommended)
-
-Open `Face_Mask_Demo.ipynb`, set `Runtime → GPU`, point it at a video, run top to bottom.
-Everything is self-contained — no repository install, no weights to download by hand.
-
-```python
-cfg = Cfg(
-    video      = "/content/drive/MyDrive/your_video.mp4",
-    max_frames = 400,        # 0 = whole video; keep it small on the first run
-)
-summary, dec, panels = run(cfg)
-```
-
-Outputs land in `runs/`:
-
-| File | Contents |
-|---|---|
-| `demo.mp4` | annotated video |
-| `demo_crops/_contact_sheet.jpg` | **the judgement sheet** |
-| `demo_crops/id###_*.jpg` | best-shot per subject, clean and annotated |
-| `demo_crops/summary.json` | every event with the reasoning behind it |
-
-### Local
+The notebook is written for Google Colab and runs top to bottom with no edits other than the
+video path.
 
 ```bash
-pip install ultralytics transformers torch opencv-python
-python -c "from face_demo import Cfg, run; run(Cfg(video='input.mp4'))"
-python test_face_demo.py          # 8/8 should pass
-python make_figures.py            # regenerate every figure in this README
+pip install ultralytics opencv-python-headless transformers torch torchvision pillow
 ```
+
+1. Open **`Face_Mask_V7.ipynb`** (Colab: *File → Upload notebook*).
+2. Run the setup cells.
+3. In the **Configuration** cell — the one place any number lives — set your input path:
+   ```python
+   INPUT_VIDEO = "/content/drive/MyDrive/your_video.mp4"
+   ```
+4. Run the rest. You get the annotated video, the event JSON and the per-ID report.
+
+For a fast first look, set `MAX_FRAMES = 400` in the same cell.
+
+---
+
+## Capturing suspect crops
+
+[`tools/save_suspect_crops.py`](tools/save_suspect_crops.py) keeps **one image per flagged
+subject** — the sharpest, largest view seen while they were flagged — instead of dumping
+hundreds of near-duplicate frames.
+
+```python
+score = laplacian_variance(crop) * sqrt(crop_area)
+```
+
+Sharpness rejects motion blur, area prefers the closest approach, and multiplying them means
+a large blurry crop cannot beat a small sharp one. Wire it into the notebook in three lines:
+
+```python
+from tools.save_suspect_crops import SuspectCapture
+capture = SuspectCapture("runs/suspects")
+
+# inside the per-track loop in process_video(), BEFORE anything is drawn:
+capture.observe(tid, frame, box, st, frame_idx)
+
+# after the frame loop:
+capture.flush()
+```
+
+Each subject produces `suspect_id007_f000123.jpg` plus a JSON sidecar carrying the track ID,
+frame, state, confidence, check count and box — and a contact sheet of every flagged subject
+for one-glance human review.
+
+---
+
+## Configuration
+
+Every tunable number in the system lives in a single cell, each with a comment saying what it
+does and which direction is stricter. The most important ones:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `POSE_WEIGHTS` | `yolo26s-pose.pt` | Accuracy/speed. `yolo11n-pose` is the fast end |
+| `YOLO_IMGSZ` | `640` | `512` faster · `960` better for distant subjects |
+| `CONF_THRES` | `0.20` | Detection floor. **Must equal `TRACK_LOW_THRESH`** |
+| `MATCH_THRESH` | `0.60` | IoU-distance limit. Lower = stricter, fewer identity swaps |
+| `TRACK_BUFFER` | `30` | Frames a lost track survives. Higher = more swap risk |
+| `MIN_EYE_DIST` | `8` | Minimum face size before any verdict is issued |
+| `MIN_SHARPNESS` | `19.0` | Blur gate on the crop |
+| `MIN_BRIGHT_FOR_SKIN` | `50` | Brightness floor below which red is impossible |
+| `RED_MARGIN` | `1.00` | How far red must lead orange. `1.0` = off; raise to make red rarer |
+| `ALERT_COOLDOWN` | `90` | Minimum frames between two alerts for one subject |
+| `ORI_BACK_ENTER` | `−0.35` | "Facing away" threshold. More negative = stricter |
+| `ORI_SAFETY_VALVE` | `45` | Force a check every N frames even when held as facing away |
+| `USE_TRACK_MEMORY` | `True` | Colour-signature re-attach after a long occlusion |
+
+The cell also carries a troubleshooting table: *if you see this problem, change this number.*
 
 ---
 
 ## Repository layout
 
 ```
-face_demo.py            the entire system — one file, linear, ~1,300 lines
-Face_Mask_Demo.ipynb    Colab notebook, generated from face_demo.py
-test_face_demo.py       8 logic tests against mock models (no GPU needed)
-make_figures.py         regenerates every figure in this README from live code
-assets/                 those figures
-legacy/                 earlier versions, kept for provenance
-STATUS.md               working notes (Persian)
+Face_Mask_V7.ipynb          the system — 37 cells, runs top to bottom
+tools/
+  save_suspect_crops.py     best-shot capture for flagged subjects
+make_figures_v7.py          regenerates the README figures from the real numbers
+assets/                     figures, stills, GIFs, demo video
+  video/demo_short.mp4      17 s — the alert sequence
+  video/demo_full.mp4       69 s — customers cleared, then the incident
+STATUS.md                   engineering log (Persian) — every decision and why
+legacy/                     earlier pipelines, kept for reference
 ```
-
-> The notebook is **generated** from `face_demo.py`. Always edit the source
-> and rebuild — editing the notebook by hand once left a stale factory
-> function in it, and the strongest model in the system silently stopped
-> loading. That bug is entry 10 in the engineering log.
-
----
-
-## Configuration
-
-Everything tunable lives in one dataclass. The three that matter:
-
-```python
-cfg.red_min_frontal = 0.45   # ↓ catches more angles, ↑ fewer profile false alarms
-cfg.suspect_enter   = 0.55   # red threshold
-cfg.min_face_px     = 40     # below this, no judgement at all
-```
-
-| Symptom | Try |
-|---|---|
-| Missing masked people in the distance | `imgsz = 960`, `min_face_px = 28` |
-| Robbery masks stay orange | `red_min_frontal = 0.35` |
-| False alarms | `suspect_enter = 0.65`, `confirm_votes = 6` |
-| Everyone reads as "facing away" | `back_threshold = -0.45` |
-| Too slow | `imgsz = 512`, `cadence_clear_s = 4.0` |
-
-The judgement sheet tells you which one you need — it prints the reasoning per subject.
 
 ---
 
 ## Engineering log
 
-Real bugs found by measuring rather than guessing. Kept here because the failures are more
-instructive than the successes.
+[`STATUS.md`](STATUS.md) is the honest version of this README: every bug, the measurement
+that found it, and the fix. It is written in Persian. The three entries worth reading even
+in translation:
 
-| # | Bug | Impact | Root cause |
-|---|---|---|---|
-| 1 | Face crop rotated 180° | classifier saw upside-down hair | `atan2` on anatomical eye order — for a frontal face the vector points backwards |
-| 2 | Keypoint gate rejected masked people | the target case was silently skipped | gate conflated "no face visible" with "not worth looking at" |
-| 3 | Label map hard-coded | whole system could invert silently | `{0:"mask", 1:"no_mask"}` instead of reading `config.id2label` |
-| 4 | Windows path without raw string | video never opened | `"C:\1\..."` — `\1` is a control character |
-| 5 | Crops taken from annotated frame | evidence images unusable | cropped after drawing |
-| 6 | Permanent green lock | thief could mask up after clearing | state locked forever |
-| 7 | Head box 2.09× too large | face filled 31% of the classifier input instead of 64% | averaged eye-derived and shoulder-derived boxes across incompatible scales |
-| 8 | `UNKNOWN` prompt described CCTV itself | zero-shot picked it every time → **zero alarms** | *"a blurry, unrecognisable, low-resolution image"* |
-| 9 | `UNKNOWN`/`BACK_HEAD` diluted the posterior | red threshold mathematically unreachable | non-informative classes competing in the same softmax |
-| 10 | Stale `build_classifier` in the notebook | the fine-tuned model never loaded at all | notebook edited by hand instead of regenerated from source |
-| 11 | Profile views alarmed | false positives | head box collapses with `cos(yaw)` and lands on hair |
-| 12 | **Hijab + mask → "thief" @ 1.00** | unusable in the target market | skin cue cannot distinguish scarf fabric from balaclava fabric |
+- **The orientation cue that hid masked people** — how a sensible-looking signal inverted the
+  system's purpose, and the five hardenings that kept the idea without the flaw.
+- **The identity swap** — how raising two "stability" parameters caused verdicts to migrate
+  between people, and why the fix ran the other way.
+- **State accumulates** — the same footage judged differently on a second pass, because a
+  tracker carries state across the whole video. Long buffers make this worse, which is a
+  second, independent argument for a short one.
 
 ---
 
-## Test suite
+## Stage 1 demo — and what lives behind it
 
-`python test_face_demo.py` — mock pose model and mock classifiers, so the *logic* is tested
-without a GPU or network.
+**This repository is the stage-1 public release.** It is a complete, runnable system, and
+everything described above is genuinely in the notebook — but it is deliberately the
+single-stream, single-GPU, notebook-shaped version.
 
-| Test | Checks |
-|---|---|
-| Verdicts | three known subjects → clear / suspicious / thief |
-| Compute budget | adaptive cadence really skips work |
-| Latency | suspicious ≤ 3 frames, alert ≤ 5 frames |
-| **Frontal gate** | frontal and 45° may alarm; profile may not |
-| Stickiness | red survives 0.4 s of contrary evidence, breaks after 3 s |
-| Identity memory | verdict survives a tracker ID switch |
-| Facing away | zero observations, zero alarms |
-| Outputs | video, judgement sheet and JSON all written |
+The production codebase is **private**, and is built around a different set of problems:
+
+- **Many cameras on one GPU** — batched inference across streams, shared model residency,
+  and a scheduler that allocates classifier budget across cameras by risk instead of
+  round-robin
+- **Continuous operation** — bounded state, no growth over hours of footage, recovery from
+  stream drops
+- **Service shape** — RTSP ingest, an event bus rather than a JSON file at the end of a run,
+  and integration hooks for existing VMS/NVR installations
+- **Cross-camera identity** — the same person recognised as they move between fields of view
+
+The public and private versions share this repository's decision logic. The private one
+answers the operational questions a shop actually has: *how many cameras per GPU, what
+happens at 3 a.m., and where does the alert go.*
 
 ---
 
-## Roadmap
+## Collaboration
 
-**Now** — validate on real footage; tune `red_min_frontal` against measured precision/recall.
+I am open to working with people on this — pilots in real retail environments, integration
+with existing camera infrastructure, research collaboration, or commercial partnership.
 
-**Next: distillation.** Every saved crop is training data. The zero-shot model becomes an
-offline *teacher* that auto-labels them; the knowledge is distilled into a ~4M-parameter
-student. Roughly 50× smaller than the current classifier — and typically *more* accurate,
-because it is trained on your cameras, your lighting, your population.
+If any of that fits what you are doing, **open an issue or message me directly** and we can
+talk properly about the details.
 
-```
-run normally → harvest crops → auto-label → distil → better model → better crops → ↺
-```
+<div align="center">
 
-**Then: shared-backbone multi-task.** Instead of re-encoding each face crop, RoIAlign the
-head box directly on YOLO's existing feature map and attach a lightweight head. Classifier
-cost drops from linear in the number of people to effectively constant.
+[![GitHub](https://img.shields.io/badge/GitHub-ParsaVictor-181717?logo=github)](https://github.com/ParsaVictor)
 
-**Then: additional evidence modules** — weapon detection at the wrists, fire, behaviour.
-Each is one line into the fusion layer, because they all write evidence to the same
-identity. That is what the architecture was built for.
+</div>
 
 ---
 
 <div align="center">
-<sub>Built for retail security in Iran. Pre-trained models only — no training step, no dataset collection.</sub>
+<sub>
+
+**Keywords** — concealed face detection · balaclava detection · retail security AI · CCTV video
+analytics · loss prevention · YOLO26 pose estimation · ByteTrack identity switch · multi-object
+tracking · occlusion handling · mask vs balaclava classification · SigLIP · head orientation
+estimation · COCO keypoints chirality · real-time surveillance · shoplifting detection ·
+zero-shot computer vision · Python · PyTorch
+
+</sub>
+
+<sub>Demo footage is publicly broadcast news material of a reported incident, used here to
+demonstrate the system's behaviour on real-world CCTV conditions.</sub>
+
 </div>
