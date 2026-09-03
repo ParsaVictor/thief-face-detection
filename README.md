@@ -139,7 +139,7 @@ system is unsure, it says so rather than guessing.**
 stateDiagram-v2
     [*] --> Analysing
 
-    Analysing --> Clear: 3 votes, "face visible" wins
+    Analysing --> Clear: 3 votes — face visible wins
     Analysing --> Medical: 3 votes, covered + skin above mask
     Analysing --> Suspicious: 3 votes, covered + no skin
 
