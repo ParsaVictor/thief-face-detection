@@ -591,14 +591,6 @@ shoplifting detection · zero-shot computer vision · Python · PyTorch
 
 </sub>
 
-<sub>
-
-**کلیدواژه‌ها** — تشخیص چهرهٔ دزد · تشخیص چهره · تشخیص دزد · دوربین مدار بسته · امنیت فروشگاه ·
-ماسک · ماسک پزشکی · نقاب · ماسکِ دزدی · تشخیص سرقت · تحلیل ویدیو · هوش مصنوعی امنیتی ·
-ردیابی افراد · تشخیص پوشش صورت · بینایی ماشین · یادگیری عمیق · پایتون
-
-</sub>
-
 <sub>Demo footage is publicly broadcast news material of a reported incident, used here to
 demonstrate the system's behaviour on real-world CCTV conditions.</sub>
 
