@@ -1,0 +1,36 @@
+flowchart TB
+    V[Video / RTSP] --> POSE[YOLO26-pose<br/>person + 17 COCO keypoints]
+    POSE --> TRK[ByteTrack<br/>tuned against identity swap]
+    TRK --> MEM[Identity memory<br/>colour-signature re-attach]
+
+    MEM --> ORI{Phase E<br/>chirality orientation}
+    ORI -->|facing away| AWAY[No judgement<br/>previous verdict preserved]
+    AWAY -.->|safety valve every 45 frames| GATE
+    ORI -->|facing camera| GATE{Face gate<br/>keypoint conf · eye distance · sharpness}
+
+    GATE -->|fails| HOLD[Analysing...<br/>no vote cast]
+    GATE -->|passes| CROP[Align + crop<br/>rotate on eye axis]
+
+    CROP --> CLS[SigLIP classifier<br/>covered / not covered]
+    CLS --> SKIN{Skin above the mask<br/>+ brightness guard}
+    SKIN -->|skin visible| ORANGE[Medical mask]
+    SKIN -->|no skin| RED[Suspicious]
+    CLS -->|face visible| GREEN[Clear]
+
+    ORANGE --> SCH[State machine<br/>voting · hysteresis · lock]
+    RED --> SCH
+    GREEN --> SCH
+    HOLD --> SCH
+
+    SCH --> CAD{Adaptive cadence<br/>red 1 · orange 3 · green 60}
+    CAD --> GATE
+
+    SCH --> DRAW[Overlay + gallery]
+    SCH --> SNAP[Best-shot suspect crop]
+    SCH --> EV[Event JSON + per-ID report]
+
+    style ORI fill:#1f6feb,color:#fff
+    style TRK fill:#238636,color:#fff
+    style SKIN fill:#da3633,color:#fff
+    style CAD fill:#bf8700,color:#fff
+    style GATE fill:#8957e5,color:#fff

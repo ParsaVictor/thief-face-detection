@@ -1,0 +1,16 @@
+stateDiagram-v2
+    [*] --> Analysing
+
+    Analysing --> Clear: 3 votes — face visible wins
+    Analysing --> Medical: 3 votes, covered + skin above mask
+    Analysing --> Suspicious: 3 votes, covered + no skin
+
+    Clear --> Suspicious: re-check every 60 frames — catches masking up inside
+    Clear --> Medical: re-check every 60 frames
+
+    Medical --> Suspicious: majority in a 4-frame window
+    Suspicious --> Medical: majority in a 4-frame window
+    Medical --> Clear: 3 green in a 4-frame window
+    Suspicious --> Clear: 3 green in a 4-frame window
+
+    Analysing --> Analysing: too far, too blurred, too dark, or facing away
